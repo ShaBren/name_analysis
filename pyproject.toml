@@ -1,7 +1,18 @@
 [project]
-name = "name-analysis"
-version = "0.1.0"
-description = "Add your description here"
+name = "name_analysis"
+version = "0.1.1"
+authors = [ {name = "Stephen Bryant", email = "stephen@stephenbryant.net"} ]
+description = "An application for viewing and analyzing name data from the SSA"
 readme = "README.md"
+license = "MIT"
+license-files = [ "LICENSE" ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies =  [ "pandas", "requests", "textual", "textual-plotext", "python-levenshtein", "jellyfish" ]
+
+[project.scripts]
+name_analysis = "name_frequency_analysis:main"
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
