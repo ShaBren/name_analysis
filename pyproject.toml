@@ -1,18 +1,30 @@
 [project]
-name = "name_analysis"
-version = "0.1.1"
+name = "name-analysis"
+version = "0.1.41"
 authors = [ {name = "Stephen Bryant", email = "stephen@stephenbryant.net"} ]
 description = "An application for viewing and analyzing name data from the SSA"
 readme = "README.md"
 license = "MIT"
 license-files = [ "LICENSE" ]
-requires-python = ">=3.13"
+requires-python = ">=3.9"
 dependencies =  [ "pandas", "requests", "textual", "textual-plotext", "python-levenshtein", "jellyfish" ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 
 [project.scripts]
-name_analysis = "name_frequency_analysis:main"
+name_analysis = "name_analysis:main"
 
 [build-system]
-requires = ["setuptools >= 77.0.3"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/name_analysis"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
 

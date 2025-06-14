@@ -18,7 +18,7 @@ from unittest.mock import patch
 import io
 
 # Assuming your main application file is named name_frequency_analysis.py
-from name_frequency_analysis import DataAnalyzer
+from name_analysis import DataAnalyzer
 
 # --- Mock Data ---
 
