@@ -8,5 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+
+.coverage
 app_state.json
 baby_names_data/

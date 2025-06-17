@@ -23,5 +23,6 @@ name-analysis = "name_analysis:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
+    "pytest-cov>=6.2.1",
 ]
 
