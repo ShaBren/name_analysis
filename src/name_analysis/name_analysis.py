@@ -10,7 +10,7 @@
 # ]
 # ///
 
-# name_analysis.py
+# baby_name_analyzer_tui.py
 # A Textual User Interface (TUI) application to analyze and visualize U.S. baby name data.
 
 import pandas as pd
@@ -22,6 +22,7 @@ from typing import Optional, List, Tuple, Dict, Any
 import math
 import json
 from functools import reduce
+import re
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -53,10 +54,11 @@ This application analyzes U.S. baby name data from the Social Security Administr
 - Use the **radio buttons** and **checkbox** to filter the data. The view will update automatically.
 - Click on a **name** in any results table to quickly get details about that name.
 - Click on a **year** in a details table to fetch the top names for that year.
+- Use the **Export CSV** button to save the data from any visible table.
 
 ### Analysis Tabs Explained
 
-* **Single Name:** View the historical popularity plot, get a statistical summary (including the "Name Signature" for its peak year), or find similarly spelled or sounding names.
+* **Single Name:** View the historical popularity plot, get a statistical summary, or find similarly spelled or sounding names.
 * **Top Names:** See a ranked list of the most popular names for a specific year. Use the Previous/Next buttons to page through years.
 * **Analysis:**
     * *Plot Unique Names*: See how vocabulary has grown over the years.
@@ -166,7 +168,6 @@ class DataAnalyzer:
         elif sex_filter == "Female":
             source_df = source_df[source_df['Sex'] == 'F']
 
-        # Get unique names and their first year
         unique_first_years = source_df.groupby('Name')['FirstYear'].min().reset_index()
         
         unique_first_years['Decade'] = (unique_first_years['FirstYear'] // 10) * 10
@@ -527,6 +528,7 @@ class NameAnalysisApp(App):
         self.status_widget = Static("Loading...")
         self.loaded_state: Optional[dict] = None
         self.current_view: str = "plot"
+        self.exportable_data: Optional[pd.DataFrame] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -579,6 +581,7 @@ class NameAnalysisApp(App):
                         yield RadioButton("Male", id="sex_male")
                         yield RadioButton("Female", id="sex_female")
                     yield Checkbox("Normalize Data (for Plots)", id="normalize_data")
+                    yield Button("Export CSV", id="export_csv_button", disabled=True)
                     with Container(id="status-container"):
                         yield self.status_widget
             with Container(id="results-pane"):
@@ -614,7 +617,7 @@ class NameAnalysisApp(App):
         if self.data_analyzer.df is not None:
             self.call_from_thread(self.status_widget.update, f"[bold green]Data loaded! Ready to analyze.[/]\n({len(self.data_analyzer.df):,} records)")
             for button in self.query(Button):
-                if button.id != "remove_name_field_button":
+                if button.id not in ("remove_name_field_button", "export_csv_button"):
                     button.disabled = False
             self._update_compare_buttons()
             self._update_year_nav_buttons()
@@ -712,6 +715,20 @@ class NameAnalysisApp(App):
             self.status_widget.update(f"[bold red]Error loading state: {e}[/]")
             self.loaded_state = None
 
+    def _update_export_button_state(self):
+        """Enables or disables the export button based on data availability."""
+        self.query_one("#export_csv_button").disabled = self.exportable_data is None or self.exportable_data.empty
+
+    def _set_exportable_data(self, data: Optional[pd.DataFrame]):
+        """Sets the data to be exported and updates the button state."""
+        self.exportable_data = data
+        self._update_export_button_state()
+
+    def _clear_exportable_data(self):
+        """Clears the exportable data and disables the button."""
+        self.exportable_data = None
+        self._update_export_button_state()
+
     def _setup_plot_axes(self, plt, data, y_column, y_label, is_normalized):
         """Helper to configure plot axes and ticks consistently."""
         plt.xlabel("Year")
@@ -750,6 +767,7 @@ class NameAnalysisApp(App):
         plt.build()
         plot.refresh()
         self.query_one("#plot-details-table").display = False
+        self._clear_exportable_data()
 
     def _draw_plot(self) -> None:
         self.current_view = "plot"
@@ -784,6 +802,7 @@ class NameAnalysisApp(App):
         details_table.display = True
         details_table.clear(columns=True)
         pivoted = name_data[name_data['Count'] > 0].pivot_table(index='Year', columns='Sex', values=['Count', 'Percentage']).fillna(0).sort_index(ascending=False)
+        pivoted = pivoted.reindex(pd.MultiIndex.from_product([['Count', 'Percentage'], ['F', 'M']]), axis=1, fill_value=0)
         details_table.add_columns("Year", "F Count", "F %", "M Count", "M %")
         for year, row in pivoted.iterrows():
             details_table.add_row(
@@ -791,6 +810,7 @@ class NameAnalysisApp(App):
                 f"{int(row.get(('Count', 'F'), 0)):,}", f"{row.get(('Percentage', 'F'), 0):.4f}%",
                 f"{int(row.get(('Count', 'M'), 0)):,}", f"{row.get(('Percentage', 'M'), 0):.4f}%"
             )
+        self._set_exportable_data(pivoted)
         self.status_widget.update(f"Showing plot and details for '{name.title()}'.")
         self._save_state()
 
@@ -818,32 +838,57 @@ class NameAnalysisApp(App):
             table.add_column("Error")
             table.add_row(f"No data found for the name '{name}'.")
             self.status_widget.update(f"[bold red]Could not find details for '{name}'.[/]")
+            self._clear_exportable_data()
             return
+            
         self.status_widget.update(f"Showing details for '{name.title()}'.")
+        
+        # Prepare data for both display and export
+        export_data = []
         table.add_column("Statistic", key="stat", width=25)
         table.add_column("Value", key="value")
-        table.add_row("Total Births", f"{details['Total Births']:,}")
-        table.add_row("First Appearance", str(details['First Appearance']))
-        table.add_row("Peak Year", f"{details['Peak Year']} ({details['Peak Year Count']:,} births)")
-        table.add_row("Most Popular Decade", details['Most Popular Decade'])
+        
+        stats = {
+            "Total Births": f"{details['Total Births']:,}",
+            "First Appearance": str(details['First Appearance']),
+            "Peak Year": f"{details['Peak Year']} ({details['Peak Year Count']:,} births)",
+            "Most Popular Decade": details['Most Popular Decade'],
+        }
+        for stat, value in stats.items():
+            export_data.append({'Statistic': stat, 'Value': value})
+            table.add_row(stat, value)
+        
         ranks = details.get("All-Time Rank", {})
-        if not ranks: table.add_row("All-Time Rank", "N/A")
+        if not ranks:
+            export_data.append({'Statistic': "All-Time Rank", 'Value': "N/A"})
+            table.add_row("All-Time Rank", "N/A")
         else:
             for sex, rank in ranks.items():
-                table.add_row(f"All-Time Rank ({'F' if sex == 'F' else 'M'})", f"#{rank:,}")
+                stat_str = f"All-Time Rank ({'F' if sex == 'F' else 'M'})"
+                value_str = f"#{rank:,}"
+                export_data.append({'Statistic': stat_str, 'Value': value_str})
+                table.add_row(stat_str, value_str)
         
         # Display Name Signature
-        table.add_row("", "") # Separator
-        table.add_row(f"[bold]Peak Year Signature[/]", f"({details.get('Peak Year')})")
+        export_data.append({'Statistic': "", 'Value': ""}) # Separator
+        table.add_row("", "") 
+        
+        peak_year_str = f"Peak Year Signature ({details.get('Peak Year')})"
+        export_data.append({'Statistic': peak_year_str, 'Value': ""})
+        table.add_row(f"[bold]{peak_year_str}[/]", "")
+        
         top_males = details.get("Peak Year Signature (Male)", [])
         top_females = details.get("Peak Year Signature (Female)", [])
         if top_males or top_females:
+            export_data.append({'Statistic': "Top Male Names", 'Value': "Top Female Names"})
             table.add_row("[u]Top Male Names[/]", "[u]Top Female Names[/]")
             for i in range(max(len(top_males), len(top_females))):
                 male_name = f"{i+1}. {top_males[i]}" if i < len(top_males) else ""
                 female_name = f"{i+1}. {top_females[i]}" if i < len(top_females) else ""
+                export_data.append({'Statistic': male_name, 'Value': female_name})
                 table.add_row(male_name, female_name)
 
+        self._set_exportable_data(pd.DataFrame(export_data))
         self._save_state()
     
     def _find_similar_names_with_worker(self) -> None:
@@ -888,7 +933,10 @@ class NameAnalysisApp(App):
         if results is None or results.empty:
             table.add_row("---", "---", "---", "---", "---", "---")
             table.add_row("No similar names found.")
+            self._set_exportable_data(pd.DataFrame([{"Info": "No similar names found."}]))
         else:
+            export_df = results[['Name', 'Sex', 'FirstYear', 'Distance', 'Count', 'PopularityRatio']].copy()
+            self._set_exportable_data(export_df)
             for row in results.itertuples():
                 ratio_str = f"{row.PopularityRatio:.1%}" if pd.notna(row.PopularityRatio) else "N/A"
                 first_year_str = str(int(row.FirstYear)) if pd.notna(row.FirstYear) else "N/A"
@@ -932,7 +980,10 @@ class NameAnalysisApp(App):
 
         if results is None or results.empty:
             table.add_row("No phonetic matches found.")
+            self._set_exportable_data(pd.DataFrame([{"Info": "No phonetic matches found."}]))
         else:
+            export_df = results[['Name', 'Sex', 'FirstYear', 'Count']].copy()
+            self._set_exportable_data(export_df)
             for row in results.itertuples():
                 first_year_str = str(int(row.FirstYear)) if pd.notna(row.FirstYear) else "N/A"
                 table.add_row(row.Name, row.Sex, first_year_str, f"{row.Count:,}")
@@ -964,7 +1015,6 @@ class NameAnalysisApp(App):
         sex_filter = self.query_one(RadioSet).pressed_button.label.plain
         self.status_widget.update(f"Showing new {sex_filter.lower()} name origins by decade.")
 
-        # Create bar chart
         decade_labels = [f"{decade}s" for decade in origins_data['Decade']]
         plt.bar(decade_labels, origins_data['NewNameCount'])
         plt.title("New Unique Names Introduced per Decade")
@@ -973,14 +1023,18 @@ class NameAnalysisApp(App):
         plt.build()
         plot.refresh()
 
-        # Display details in table
         details_table = self.query_one("#plot-details-table")
         details_table.display = True
         details_table.clear(columns=True)
         details_table.add_column("Decade", key="decade")
         details_table.add_column("New Names Introduced", key="new_names")
+        export_data = []
         for row in origins_data.itertuples():
-            details_table.add_row(f"{row.Decade}s", f"{row.NewNameCount:,}")
+            decade_str = f"{row.Decade}s"
+            count_str = f"{row.NewNameCount:,}"
+            details_table.add_row(decade_str, count_str)
+            export_data.append({"Decade": decade_str, "New Names Introduced": row.NewNameCount})
+        self._set_exportable_data(pd.DataFrame(export_data))
         self._save_state()
 
 
@@ -1007,6 +1061,7 @@ class NameAnalysisApp(App):
         details_table.add_column(f"Unique {sex_label} Names", key="unique_count")
         for row in unique_names.sort_values(by="Year", ascending=False).itertuples():
             details_table.add_row(str(row.Year), f"{row.Name:,}")
+        self._set_exportable_data(unique_names)
         self._save_state()
 
     def _get_validated_input(self, input_id: str, default: int) -> int:
@@ -1074,20 +1129,36 @@ class NameAnalysisApp(App):
         details_table.add_column("Year", key="faller_year")
         details_table.add_column(change_label, key="faller_change")
         details_table.columns["separator"].cell_class = "separator-column"
+        
+        export_data = []
         for i in range(n):
-            g_name, g_sex, g_year, g_change = "", "", "", ""
-            if top_gainers is not None and i < len(top_gainers):
-                gainer = top_gainers.iloc[i]
-                g_val = gainer['Change']
-                g_str = f"[green]+{g_val:.2f}%[/]" if is_normalized else f"[green]+{g_val:,.0f}[/]"
-                g_name, g_sex, g_year, g_change = gainer['Name'], gainer['Sex'], str(gainer['Year']), g_str
-            l_name, l_sex, l_year, l_change = "", "", "", ""
-            if top_losers is not None and i < len(top_losers):
-                loser = top_losers.iloc[i]
-                l_val = loser['Change']
-                l_str = f"[red]{l_val:.2f}%[/]" if is_normalized else f"[red]{l_val:,.0f}[/]"
-                l_name, l_sex, l_year, l_change = loser['Name'], loser['Sex'], str(loser['Year']), l_str
-            details_table.add_row(g_name, g_sex, g_year, g_change, "|", l_name, l_sex, l_year, l_change)
+            g_row = top_gainers.iloc[i] if top_gainers is not None and i < len(top_gainers) else None
+            l_row = top_losers.iloc[i] if top_losers is not None and i < len(top_losers) else None
+            
+            g_change_val = g_row['Change'] if g_row is not None else ''
+            g_str = f"+{g_change_val:.2f}%" if g_row is not None and is_normalized else f"+{g_change_val:,.0f}" if g_row is not None else ''
+            l_change_val = l_row['Change'] if l_row is not None else ''
+            l_str = f"{l_change_val:.2f}%" if l_row is not None and is_normalized else f"{l_change_val:,.0f}" if l_row is not None else ''
+
+            export_row = {
+                'Gainer_Name': g_row['Name'] if g_row is not None else None,
+                'Gainer_Sex': g_row['Sex'] if g_row is not None else None,
+                'Gainer_Year': g_row['Year'] if g_row is not None else None,
+                f'Gainer_{change_label}': g_change_val,
+                'Loser_Name': l_row['Name'] if l_row is not None else None,
+                'Loser_Sex': l_row['Sex'] if l_row is not None else None,
+                'Loser_Year': l_row['Year'] if l_row is not None else None,
+                f'Loser_{change_label}': l_change_val
+            }
+            export_data.append(export_row)
+            
+            details_table.add_row(
+                g_row['Name'] if g_row is not None else "", g_row['Sex'] if g_row is not None else "", str(g_row['Year']) if g_row is not None else "", f"[green]{g_str}[/]" if g_row is not None else "",
+                "|",
+                l_row['Name'] if l_row is not None else "", l_row['Sex'] if l_row is not None else "", str(l_row['Year']) if l_row is not None else "", f"[red]{l_str}[/]" if l_row is not None else ""
+            )
+
+        self._set_exportable_data(pd.DataFrame(export_data))
         self.status_widget.update("Showing biggest gainers and fallers.")
         self._save_state()
 
@@ -1097,7 +1168,6 @@ class NameAnalysisApp(App):
         if not names_to_compare:
             self.status_widget.update("[bold yellow]Please enter at least one name to compare.[/]")
             self._draw_welcome_plot()
-            self.query_one("#plot-details-table").display = False
             return
         self.status_widget.update(f"Comparing {', '.join(names_to_compare)}...")
         is_normalized = self.query_one("#normalize_data", Checkbox).value
@@ -1114,7 +1184,6 @@ class NameAnalysisApp(App):
         if not all_name_data_list:
             self.status_widget.update(f"[bold yellow]None of the specified names were found.[/]")
             self._draw_welcome_plot()
-            self.query_one("#plot-details-table").display = False
             return
         
         combined_data = pd.concat(all_name_data_list)
@@ -1149,6 +1218,7 @@ class NameAnalysisApp(App):
                 row_values = [str(int(year))] + [f"{int(count):,}" for count in row]
                 details_table.add_row(*row_values)
 
+        self._set_exportable_data(pivoted.reset_index())
         self.status_widget.update(f"Showing comparison for: {', '.join(names_to_compare)}")
         self._save_state()
 
@@ -1174,10 +1244,12 @@ class NameAnalysisApp(App):
         table.add_column("Sex", key="sex")
         table.add_column("Avg. Popularity (%)", key="avg_perc")
         if top_enduring is not None and not top_enduring.empty:
+            self._set_exportable_data(top_enduring)
             for i, row in enumerate(top_enduring.itertuples(), 1):
                 table.add_row(str(i), row.Name, row.Sex, f"{row.Percentage:.5f}%")
         else:
             table.add_row("Could not calculate enduring popularity.")
+            self._clear_exportable_data()
         self.status_widget.update("Showing names with the most enduring popularity.")
         self._save_state()
 
@@ -1205,6 +1277,7 @@ class NameAnalysisApp(App):
              table.add_column("Info")
              table.add_row(f"No data available for the year {year}.")
              self.query_one("#loading-overlay").display = False
+             self._clear_exportable_data()
              return
         
         def get_move_str(mvmt):
@@ -1212,6 +1285,8 @@ class NameAnalysisApp(App):
             mvmt = int(mvmt)
             if mvmt == 0: return "-"
             return f"[green]+{mvmt}[/]" if mvmt > 0 else f"[red]{mvmt}[/]"
+        
+        export_data = []
 
         if sex_label == "Both":
             table.add_column("Rank", key="rank_f"); table.add_column("Mvmt", key="mvmt_f"); table.add_column("Female", key="name_f"); table.add_column("Count", key="count_f"); table.add_column("%", key="perc_f"); table.add_column("|", key="separator"); table.add_column("Rank", key="rank_m"); table.add_column("Mvmt", key="mvmt_m"); table.add_column("Male", key="name_m"); table.add_column("Count", key="count_m"); table.add_column("%", key="perc_m")
@@ -1219,6 +1294,10 @@ class NameAnalysisApp(App):
             top_f = results.get('female', pd.DataFrame()); top_m = results.get('male', pd.DataFrame())
             for i in range(max(len(top_f), len(top_m))):
                 f_row = top_f.iloc[i] if i < len(top_f) else None; m_row = top_m.iloc[i] if i < len(top_m) else None
+                export_data.append({
+                    "Rank_F": i + 1 if f_row is not None else None, "Mvmt_F": f_row['Mvmt'] if f_row is not None else None, "Name_F": f_row['Name'] if f_row is not None else None, "Count_F": f_row['Count'] if f_row is not None else None, "Perc_F": f_row['Percentage'] if f_row is not None else None,
+                    "Rank_M": i + 1 if m_row is not None else None, "Mvmt_M": m_row['Mvmt'] if m_row is not None else None, "Name_M": m_row['Name'] if m_row is not None else None, "Count_M": m_row['Count'] if m_row is not None else None, "Perc_M": m_row['Percentage'] if m_row is not None else None,
+                })
                 table.add_row(
                     str(i + 1) if f_row is not None else "", get_move_str(f_row['Mvmt']) if f_row is not None else "", f_row['Name'] if f_row is not None else "", f"{f_row['Count']:,}" if f_row is not None else "", f"{f_row['Percentage']:.4f}%" if f_row is not None else "", "|",
                     str(i + 1) if m_row is not None else "", get_move_str(m_row['Mvmt']) if m_row is not None else "", m_row['Name'] if m_row is not None else "", f"{m_row['Count']:,}" if m_row is not None else "", f"{m_row['Percentage']:.4f}%" if m_row is not None else ""
@@ -1226,8 +1305,11 @@ class NameAnalysisApp(App):
         else:
             table.add_column("Rank", key="rank"); table.add_column("Mvmt", key="mvmt"); table.add_column("Name", key="name"); table.add_column("Sex", key="sex"); table.add_column("Count", key="count"); table.add_column("% of Total", key="perc")
             top_names = results.get(sex_label.lower(), pd.DataFrame())
+            export_data = top_names
             for i, row in top_names.iterrows():
                 table.add_row(str(i + 1), get_move_str(row.Mvmt), row.Name, row.Sex, f"{row.Count:,}", f"{row.Percentage:.4f}%")
+        
+        self._set_exportable_data(pd.DataFrame(export_data))
         self.status_widget.update(f"Showing top {n} names for {year} ({sex_label}).")
         self.query_one("#loading-overlay").display = False
         self._save_state()
@@ -1282,6 +1364,31 @@ class NameAnalysisApp(App):
                 offset = -1 if event.button.id == "prev_year_button" else 1
                 year_input.value = str(current_year + offset)
                 self.query_one("#top_names_button").press()
+        elif event.button.id == "export_csv_button":
+            self.export_current_data()
+            
+    def export_current_data(self):
+        if self.exportable_data is None or self.exportable_data.empty:
+            self.status_widget.update("[bold red]No data to export.[/]")
+            return
+
+        name_input = self.query_one("#name_input", Input).value.strip()
+        year_input = self.query_one("#year_input", Input).value.strip()
+        
+        # Sanitize inputs for filename
+        safe_name = re.sub(r'[\W_]+', '', name_input) if name_input else ""
+        safe_year = re.sub(r'[\W_]+', '', year_input) if year_input else ""
+        
+        filename = f"{self.current_view}"
+        if safe_name: filename += f"_{safe_name}"
+        if safe_year and self.current_view == "table": filename += f"_{safe_year}"
+        filename += ".csv"
+        
+        try:
+            self.exportable_data.to_csv(filename, index=False)
+            self.status_widget.update(f"[bold green]Data exported to '{filename}'[/]")
+        except Exception as e:
+            self.status_widget.update(f"[bold red]Error exporting data: {e}[/]")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "year_input":
@@ -1304,7 +1411,7 @@ class NameAnalysisApp(App):
         col_key = event.cell_key.column_key.value
 
         name_keys = {"name_f", "name_m", "name", "gainer_name", "faller_name"}
-        year_keys = {"Year", "gainer_year", "faller_year"}
+        year_keys = {"Year", "gainer_year", "faller_year", "decade"}
 
         if col_key in name_keys:
             if selected_name := str(event.value):
@@ -1312,13 +1419,11 @@ class NameAnalysisApp(App):
                 self.query_one("#control-tabs").active = "single-name-controls"
                 self.query_one("#get_details_button").press()
         elif col_key in year_keys:
-            self.query_one("#year_input").value = str(event.value)
+            year_value = str(event.value).replace("s", "") # Handle "1990s"
+            self.query_one("#year_input").value = year_value
             self.query_one("#control-tabs").active = "top-names-controls"
             self.query_one("#top_names_button").press()
 
-def main():
+if __name__ == "__main__":
     app = NameAnalysisApp()
     app.run()
-
-if __name__ == "__main__":
-	main()
