@@ -10,7 +10,7 @@
 # ]
 # ///
 
-# baby_name_analyzer_tui.py
+# name_analysis.py
 # A Textual User Interface (TUI) application to analyze and visualize U.S. baby name data.
 
 import pandas as pd
@@ -1316,6 +1316,9 @@ class NameAnalysisApp(App):
             self.query_one("#control-tabs").active = "top-names-controls"
             self.query_one("#top_names_button").press()
 
-if __name__ == "__main__":
+def main():
     app = NameAnalysisApp()
     app.run()
+
+if __name__ == "__main__":
+	main()

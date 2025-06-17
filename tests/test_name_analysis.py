@@ -16,9 +16,15 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 import io
+import jellyfish
 
-# Assuming your main application file is named name_frequency_analysis.py
-from name_analysis import DataAnalyzer
+# This import is now more robust to handle different project structures.
+try:
+    # Assumes a package structure like: name_analysis/name_analysis.py
+    from name_analysis.name_analysis import DataAnalyzer
+except ImportError:
+    # Falls back to a single file: name_frequency_analysis.py
+    from name_frequency_analysis import DataAnalyzer
 
 # --- Mock Data ---
 
@@ -42,16 +48,9 @@ def mock_data_analyzer():
     analyzer.all_time_totals = analyzer.df.groupby(['Name', 'Sex'])['Count'].sum().reset_index()
     analyzer.unique_name_sex_pairs = analyzer.df[['Name', 'Sex']].drop_duplicates().reset_index(drop=True)
     analyzer.first_year_df = analyzer.df.groupby(['Name', 'Sex'])['Year'].min().reset_index().rename(columns={'Year': 'FirstYear'})
-    analyzer.phonetic_df = analyzer.unique_name_sex_pairs.copy()
     
-    # Mock jellyfish import if it's used in the tested methods
-    try:
-        import jellyfish
-        analyzer.phonetic_df['Metaphone'] = analyzer.phonetic_df['Name'].apply(jellyfish.metaphone)
-    except ImportError:
-        # If jellyfish isn't installed in the test environment, skip this part
-        # A more robust solution might mock the jellyfish library itself.
-        pass
+    analyzer.phonetic_df = analyzer.unique_name_sex_pairs.copy()
+    analyzer.phonetic_df['Metaphone'] = analyzer.phonetic_df['Name'].apply(jellyfish.metaphone)
 
     return analyzer
 
@@ -103,12 +102,14 @@ def test_get_similar_names_by_spelling(mock_data_analyzer):
 
 def test_get_phonetically_similar_names(mock_data_analyzer):
     """Test finding names that sound alike using Metaphone."""
-    # Ensure jellyfish was available to create the phonetic_df
     if mock_data_analyzer.phonetic_df is None:
-        pytest.skip("jellyfish library not available, skipping phonetic test")
+        pytest.skip("phonetic_df not created, skipping phonetic test")
 
-    results, _, _ = mock_data_analyzer.get_phonetically_similar_names("Brian", "Male")
+    # The fixture already contains 'Brian' and 'Bryan'
+    results, _, _ = mock_data_analyzer.get_phonetically_similar_names("John", "Male")
     
     assert results is not None
-    # Metaphone code for "Brian" and "Bryan" is 'BRN'
-    assert 'Bryan' in results['Name'].tolist()
+    # Metaphone code for "Brian" and "Bryan" is 'BRN' and 'BRYN'
+    assert 'Jon' in results['Name'].tolist()
+    assert 'Brian' not in results['Name'].tolist() # Shouldn't include the source name
+    assert 'Bryan' not in results['Name'].tolist()  # Shouldn't include non-matches
