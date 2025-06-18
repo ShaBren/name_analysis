@@ -1,3 +1,6 @@
+<!-- TOC --><a name="name-analysis"></a>
+# Name Analysis
+
 <!-- TOC start -->
 
 - [Name Analysis](#name-analysis)
@@ -12,8 +15,6 @@
 
 <!-- TOC end -->
 
-<!-- TOC --><a name="name-analysis"></a>
-# Name Analysis
 
 <!-- TOC --><a name="what-is-it"></a>
 ## What is it?
